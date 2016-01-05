@@ -16,8 +16,6 @@
  */
 package org.apache.flume.sink.solr.morphline;
 
-import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
 import com.oreilly.servlet.multipart.FilePart;
 import com.oreilly.servlet.multipart.MultipartParser;
 import com.oreilly.servlet.multipart.ParamPart;
@@ -34,6 +32,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.servlet.http.HttpServletRequest;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.*;
 import java.util.zip.GZIPInputStream;
@@ -48,6 +47,7 @@ import java.util.zip.GZIPInputStream;
  * <p/>
  * Example client usage:
  * <p/>
+ *
  * <pre>
  * curl --data-binary @sample-statuses-20120906-141433-medium.avro 'http://127.0.0.1:5140?resourceName=sample-statuses-20120906-141433-medium.avro' --header 'Content-Type:application/octet-stream' --verbose
  * </pre>
@@ -100,13 +100,21 @@ public class BlobHandler implements HTTPSourceHandler {
         }
     }
 
-    public static Map<String, String> ParseFileNameToEventHeader(
-            String fileName) {
-
-        //data format right now is:{LT=123,FP=123,PID=123,SID=123}
+    public static Map<String, String> ParseFileNameToEventHeader(String fileName) {
+        Map<String, String> retMap = new HashMap<String, String>();
+        // data format right now is:{LT=123,FP=123,PID=123,SID=123}.log.gz
         try {
-            Map<String, String> retMap = new Gson().fromJson(fileName, new TypeToken<HashMap<String, Object>>() {
-            }.getType());
+            retMap.put("filename", fileName);
+            // Map<String, String> retMap = new Gson().fromJson(fileName, new
+            // TypeToken<HashMap<String, Object>>() {
+            // }.getType());
+            // Map<String, String> retMap = new HashMap<String, String>();
+            // String type[] = fileName.split(",");
+            // for (String str : type) {
+            // str = str.replace("{", "").replace("}", "");
+            // String pair[] = str.split("=");
+            // retMap.put(pair[0], pair[1]);
+            // }
             if (LOGGER.isDebugEnabled()) {
                 LOGGER.debug("Fomat Event Header is :" + retMap.toString());
             }
@@ -131,6 +139,28 @@ public class BlobHandler implements HTTPSourceHandler {
         }
     }
 
+    private ByteArrayOutputStream TransByteStream(InputStream in)
+            throws IOException {
+        int blobLength = 0, n;
+        byte[] buf = new byte[Math.min(maxBlobLength, DEFAULT_BUFFER_SIZE)];
+        ByteArrayOutputStream blob = null;
+        while ((n = in.read(buf, 0,
+                Math.min(buf.length, maxBlobLength - blobLength))) != -1) {// load
+            if (blob == null) {
+                blob = new ByteArrayOutputStream(n);
+            }
+            blob.write(buf, 0, n);
+            blobLength += n;
+            if (blobLength >= maxBlobLength) {
+                LOGGER.warn(
+                        "Request length exceeds maxBlobLength ({}), truncating BLOB event!",
+                        maxBlobLength);
+                break;
+            }
+        }
+        return blob;
+    }
+
     /*
      * by Marvin change per request to multipart httprequest use MultiPartParser
      * to convert request to multiServletRequest
@@ -145,126 +175,85 @@ public class BlobHandler implements HTTPSourceHandler {
         InputStream in = null;
         byte[] bytes = null;
         ByteArrayOutputStream blob = null;
-        int blobLength = 0, n;
-        byte[] buf = new byte[Math.min(maxBlobLength, DEFAULT_BUFFER_SIZE)];
+        // int blobLength = 0, n;
+        Event event;// lazy instance
+        // byte[] buf = new byte[Math.min(maxBlobLength, DEFAULT_BUFFER_SIZE)];
         if (USEMULTIREQ) {
-            MultipartParser parser = new MultipartParser(request,
-                    1024 * 1024 * 1024);
+            MultipartParser parser = new MultipartParser(request, 129 * 1024);// 128KB
             List<Event> resultListEvents = new ArrayList<Event>();
-            if (parser != null) {
-                Part partFilePart;
-                try {
-                    while ((partFilePart = parser.readNextPart()) != null) {
+            LOGGER.info("enter in progress");
+            Part partFilePart = null;
+            while ((partFilePart = parser.readNextPart()) != null) {
+                LOGGER.debug("FileName cought:" + partFilePart.getName());
+                String fileName = partFilePart.getName();
 
-                        if (partFilePart instanceof FilePart) {// for now ,clint
-                            // uploader file only
-                            // This is an attachment or an uploaded file.
-                            Event event;// lazy instance
-                            String fileName = ((FilePart) partFilePart)
-                                    .getFileName();
-                            // need do something to parse file name and rebuild event
-                            in = ((FilePart) partFilePart).getInputStream();
-                            assert in != null;
-                            while ((n = in.read(buf, 0, Math.min(buf.length, maxBlobLength - blobLength))) != -1) {// load
-                                if (blob == null) {
-                                    blob = new ByteArrayOutputStream(n);
-                                }
-                                blob.write(buf, 0, n);
-                                blobLength += n;
-                                if (blobLength >= maxBlobLength) {
-                                    LOGGER.warn(
-                                            "Request length exceeds maxBlobLength ({}), truncating BLOB event!",
-                                            maxBlobLength);
-                                    break;
-                                }
-                            }
-                            //make choice to whether unzip data
-                            if (USEZIP) {
-                                byte[] gzipArray = blob != null ? blob
-                                        .toByteArray() : new byte[0];
-                                bytes = DeCompress(gzipArray);
-                                //append split string in content
-                                bytes = append(bytes, new String("***************").getBytes());
-                                event = EventBuilder.withBody(bytes,
-                                        ParseFileNameToEventHeader(fileName));
-                            } else {
-                                event = EventBuilder.withBody(
-                                        blob.toByteArray(),
-                                        ParseFileNameToEventHeader(fileName));
-                            }
-                            if (LOGGER.isDebugEnabled()) {
-                                LOGGER.debug("Event File Name is:" + fileName);
-                                LOGGER.debug("Event Body is:"
-                                        + new String(USEZIP == true ? bytes
-                                        : blob.toByteArray()));
-                            }
-                            resultListEvents.add(event);
+                if (partFilePart.isFile()) {
+                    LOGGER.debug("enter in file progress");
+                    FilePart filepart = (FilePart) partFilePart;
+                    in = filepart.getInputStream();
+                    blob = TransByteStream(in);
 
-                        } else if (partFilePart instanceof ParamPart) {
-                            // This is request parameter from the query string
-                            return null;
-                        }
-
-                    }
-                } catch (Exception e) {
-                    throw e;
-                } finally {
-                    in.close();
-                    blob.close();
+                } else if (partFilePart.isParam()) {
+                    LOGGER.debug("enter in parm progress");
+                    ParamPart paramPart = (ParamPart) partFilePart;
+                    in = new ByteArrayInputStream(paramPart.getValue());
+                    blob = TransByteStream(in);
+                } else {
+                    // part is null
+                    // do nothing
                 }
-                return resultListEvents;
+                if (USEZIP) {
+                    assert blob != null;
+                    byte[] gzipArray = blob != null ? blob.toByteArray()
+                            : new byte[0];
+                    bytes = DeCompress(gzipArray);
+                    // append split string in content
+                    bytes = append(bytes,
+                            new String("***************").getBytes());
+                    event = EventBuilder.withBody(bytes,
+                            ParseFileNameToEventHeader(fileName));
+                } else {
+                    LOGGER.debug("USEZIP is close");
+                    event = EventBuilder.withBody(blob.toByteArray(),
+                            ParseFileNameToEventHeader(fileName));
+                }
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug("Event File Name is:" + fileName);
+                    LOGGER.debug("Event Body is:"
+                            + new String(USEZIP == true ? bytes : blob
+                            .toByteArray()));
+                }
+                resultListEvents.add(event);
             }
+            return resultListEvents;
         } else {// not multi request,so parse per request
             Map<String, String> headers = getHeaders(request);// once process
+            in = request.getInputStream();
             try {
-                Event event;
-                while ((n = in.read(buf, 0,
-                        Math.min(buf.length, maxBlobLength - blobLength))) != -1) {
-                    if (blob == null) {
-                        blob = new ByteArrayOutputStream(n);
-                    }
-                    blob.write(buf, 0, n);
-                    blobLength += n;
-                    if (blobLength >= maxBlobLength) {
-                        LOGGER.warn(
-                                "Request length exceeds maxBlobLength ({}), truncating BLOB event!",
-                                maxBlobLength);
-                        break;
-                    }
-                }
+                blob = TransByteStream(in);
 
                 byte[] array = blob != null ? blob.toByteArray() : new byte[0];
                 if (USEZIP) {
                     bytes = DeCompress(array);
                     long a = System.currentTimeMillis();
-
-                    // bytes = append(bytes, new
-                    // String("***************").getBytes());
-                    // System.out.println("执行耗时 : " +
-                    // (System.currentTimeMillis() -
-                    // a)
-                    // + " 秒 ");
                     bytes = append(bytes,
                             new String("***************").getBytes());
-                    // bytes = new String(bytes).replace("/n", ",").getBytes();
-                    // System.out.println("执行耗时 : " +
-                    // (System.currentTimeMillis() -
-                    // a)
-                    // + " 秒 ");
                     event = EventBuilder.withBody(bytes, headers);
                     LOGGER.debug("Event Body is:" + new String(bytes));
-                } else
+                } else {
                     event = EventBuilder.withBody(array, headers);
-                // LOGGER.debug("blobEvent plug by zip: {}", event);
+                    LOGGER.debug("blobEvent plug by zip: {}", event);
+                }
                 return Collections.singletonList(event);
             } catch (Exception e) {
                 throw e;
             } finally {
-                in.close();
-                blob.close();
+                if (in != null)
+                    in.close();
+                if (blob != null)
+                    blob.close();
             }
         }
-        return null;
     }
 
     private Map<String, String> getHeaders(HttpServletRequest request) {
