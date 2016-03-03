@@ -104,12 +104,12 @@ public class BlobHandler implements HTTPSourceHandler {
         HashMap<String,String> retMap=new HashMap<String,String>();
         // data format right now is:file=1|-1|1|-1
         try {
-            String []header=fileName.split("|");
+            String []header=fileName.split("\\|");
             //HashMap<String,String> map=new HashMap<String,String>();
-            retMap.put("FP",header[0]==null?header[0]:"");
-            retMap.put("PID",header[1]==null?header[1]:"");
-            retMap.put("SID",header[2]==null?header[2]:"");
-            retMap.put("LP",header[3]==null?header[3]:"");
+            retMap.put("FP",header[0]!=null?header[0]:"");
+            retMap.put("PID",header[1]!=null?header[1]:"");
+            retMap.put("SID",header[2]!=null?header[2]:"");
+            retMap.put("LP",header[3]!=null?header[3]:"");
             if (LOGGER.isDebugEnabled()) {
                 LOGGER.debug("Fomat Event Header is :" + retMap.toString());
             }
