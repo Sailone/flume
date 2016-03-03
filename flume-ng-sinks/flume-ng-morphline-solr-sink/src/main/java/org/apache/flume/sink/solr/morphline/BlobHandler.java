@@ -101,20 +101,15 @@ public class BlobHandler implements HTTPSourceHandler {
     }
 
     public static Map<String, String> ParseFileNameToEventHeader(String fileName) {
-        Map<String, String> retMap = new HashMap<String, String>();
-        // data format right now is:{LT=123,FP=123,PID=123,SID=123}.log.gz
+        HashMap<String,String> retMap=new HashMap<String,String>();
+        // data format right now is:file=1|-1|1|-1
         try {
-            retMap.put("filename", fileName);
-            // Map<String, String> retMap = new Gson().fromJson(fileName, new
-            // TypeToken<HashMap<String, Object>>() {
-            // }.getType());
-            // Map<String, String> retMap = new HashMap<String, String>();
-            // String type[] = fileName.split(",");
-            // for (String str : type) {
-            // str = str.replace("{", "").replace("}", "");
-            // String pair[] = str.split("=");
-            // retMap.put(pair[0], pair[1]);
-            // }
+            String []header=fileName.split("|");
+            //HashMap<String,String> map=new HashMap<String,String>();
+            retMap.put("FP",header[0]==null?header[0]:"");
+            retMap.put("PID",header[1]==null?header[1]:"");
+            retMap.put("SID",header[2]==null?header[2]:"");
+            retMap.put("LP",header[3]==null?header[3]:"");
             if (LOGGER.isDebugEnabled()) {
                 LOGGER.debug("Fomat Event Header is :" + retMap.toString());
             }
@@ -179,9 +174,9 @@ public class BlobHandler implements HTTPSourceHandler {
         Event event;// lazy instance
         // byte[] buf = new byte[Math.min(maxBlobLength, DEFAULT_BUFFER_SIZE)];
         if (USEMULTIREQ) {
-            MultipartParser parser = new MultipartParser(request, 129 * 1024);// 128KB
+
+            MultipartParser parser = new MultipartParser(request, 2048 * 1024);// 2MB
             List<Event> resultListEvents = new ArrayList<Event>();
-            LOGGER.info("enter in progress");
             Part partFilePart = null;
             while ((partFilePart = parser.readNextPart()) != null) {
                 LOGGER.debug("FileName cought:" + partFilePart.getName());
@@ -208,8 +203,8 @@ public class BlobHandler implements HTTPSourceHandler {
                             : new byte[0];
                     bytes = DeCompress(gzipArray);
                     // append split string in content
-                    bytes = append(bytes,
-                            new String("***************").getBytes());
+//                    bytes = append(bytes,
+//                            new String("***************").getBytes());
                     event = EventBuilder.withBody(bytes,
                             ParseFileNameToEventHeader(fileName));
                 } else {
@@ -236,8 +231,7 @@ public class BlobHandler implements HTTPSourceHandler {
                 if (USEZIP) {
                     bytes = DeCompress(array);
                     long a = System.currentTimeMillis();
-                    bytes = append(bytes,
-                            new String("***************").getBytes());
+
                     event = EventBuilder.withBody(bytes, headers);
                     LOGGER.debug("Event Body is:" + new String(bytes));
                 } else {
